@@ -7,8 +7,11 @@ from glob import glob
 from collections import defaultdict
 
 if __name__ == '__main__':
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+
     # Config
-    config_fpath = './config.yaml'
+    config_fpath = os.path.join(REPO_ROOT, 'config.yaml')
     with open(config_fpath, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -16,7 +19,7 @@ if __name__ == '__main__':
     num_samples_per_condition = 5
     azim_step = 30
     sr = 44100
-    output_dir = f'/home/dm1u25/BSL_Saddler/binaural_samples/{mode}'
+    output_dir = os.path.join(SCRIPT_DIR, 'binaural_samples', mode)
     os.makedirs(output_dir, exist_ok=True)
 
     # Dataset directory

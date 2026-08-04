@@ -6,7 +6,7 @@ so outputs are identical every epoch. Computing once and saving to HDF5
 reduces per-epoch training time from ~2h to minutes.
 
 Usage:
-    python precompute_ei.py [--gpu 0] [--batch_size 16] [--config config.yaml]
+    python yang/precompute_ei.py [--gpu 0] [--batch_size 16] [--config config.yaml]
 
 Output:
     /scratch/dm1u25/dataset/Saddler_EI/
@@ -16,6 +16,12 @@ Output:
 """
 
 import os
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, REPO_ROOT)
+
 import argparse
 import yaml
 import numpy as np
@@ -33,7 +39,7 @@ class CochlearPipeline(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-        filter_param_dir = './filter_param_dir'
+        filter_param_dir = os.path.join(REPO_ROOT, 'filter_param_dir')
         os.makedirs(filter_param_dir, exist_ok=True)
         sr = 44100
         sr_res = 4000
@@ -129,7 +135,7 @@ def main():
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for forward pass')
     parser.add_argument('--num_workers', type=int, default=12, help='DataLoader workers')
-    parser.add_argument('--config', type=str, default='config.yaml', help='Config file path')
+    parser.add_argument('--config', type=str, default=os.path.join(REPO_ROOT, 'config.yaml'), help='Config file path')
     parser.add_argument('--output_dir', type=str, default='/scratch/dm1u25/dataset/Saddler_EI',
                         help='Output directory for EI features')
     args = parser.parse_args()

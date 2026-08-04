@@ -6,8 +6,11 @@ import numpy as np
 import plotly.graph_objects as go
 
 if __name__ == '__main__':
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+
     # Read config
-    config_fpath = './config.yaml'
+    config_fpath = os.path.join(REPO_ROOT, 'config.yaml')
     with open(config_fpath, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -20,7 +23,7 @@ if __name__ == '__main__':
         key_excluded = ['signal', 'list_background_index_brir']
 
     # Directory to save data_analysis
-    figure_dir = f'data_analysis/{mode}'
+    figure_dir = os.path.join(SCRIPT_DIR, mode)
     os.makedirs(figure_dir, exist_ok=True)
 
     # Directory Setting
