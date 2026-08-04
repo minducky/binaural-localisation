@@ -71,7 +71,7 @@ class ExperimentManager:
     def init_wandb(self, exp_config, exp_idx, exp_dirs):
         """Initialize Weight & Biases"""
         wandb.init(
-            project="BSL_Saddler",
+            project="binaural-localisation",
             group=self.exps_purpose,
             name=f'exp{exp_idx}_{exp_config["DESCRIPTION"]}',
             config=exp_config,
