@@ -1,0 +1,98 @@
+## Experiment Experiment Settings
+EXPERIMENTS_PURPOSE: 'Ducky_ICML'
+EXPERIMENT_CONFIGS:
+  DESCRIPTION: ['Ducky_ITDILD_Onset'] # ['MLP_1', 'MLP_2', 'MLP_3']
+  MODEL: ['Ducky']
+  GPU_NUM: [0]
+  DEBUG: [False]
+CACHE_SIZE:
+  TRAIN: 2
+  VAL: 2
+  EVAL: 2
+
+## DATASET MODE
+# 'Total'  : Using all azimuth/elevation (504 classes, azim : 0-360° 5° interval (72 classes), elev : 0-60° 10° interval (7 classes))
+# 'Certain': Only azimuth/elevation relevant to evaluation (95 classes, azim 270-360° + 0-90° 10° interval (19 classes), elev 0-40° 10° interval (5 classes))
+DATASET_MODE: 'Total'
+# When Certain
+CERTAIN_ANGLE_FILTER:
+  AZIM_RANGE: [270, 360, 0, 90]  # Two ranges: [start1, end1(not inclusive), start2, end2(inclusive)]
+  ELEV_RANGE: [0, 40]            # [min, max] inclusive
+  AZIM_STEP: 10
+  ELEV_STEP: 10
+
+## DIRECTORY
+DATASET_DIR: '/scratch/dm1u25/dataset/Saddler'
+EI_DATASET_DIR: '/scratch/dm1u25/dataset/Saddler_EI'
+RESULTS_DIR: '/home/dm1u25/BSL_Saddler/results'
+FILTER_COEFF_DIR: './models/filter_coeff_dir'
+
+## RANDOM_SEED
+RANDOM_SEED: 42
+
+## DESCRIPTION WHEN SINGLE EXPERIMENT (Not used usually)
+DESCRIPTION: 'debug'
+
+## PROFILER (For diagnosis)
+PROFILER: True
+
+## TRAIN SETTING
+DEBUG: False
+DEBUG_CONFIG:
+  TRAIN_DATASET_SIZE: 32
+  VAL_DATASET_SIZE: 32
+  EVAL_DATASET_SIZE: 1600
+  CACHE_SIZE:
+    TRAIN: 1
+    VAL: 1
+    EVAL: 1
+  BATCH_SIZE: 32
+  NUM_EPOCHS: 3
+  PATIENCE: 10
+BATCH_SIZE: 32
+LEARNING_RATE: 0.0001
+WEIGHT_DECAY: 0.0001
+WARMUP_EPOCHS: 5
+GPU_NUM: 0
+NUM_WORKERS: 4
+SAMPLER_MODE: 'shuffle'   # 'shuffle' (random) | 'grouped' (h5 file-grouped, faster I/O)
+NUM_EPOCHS: 100
+PATIENCE: 10
+
+
+## MODEL
+MODEL: 'Ducky'
+# NUM_CLASSES is set automatically from DATASET_MODE (Total: 504, Certain: 95)
+
+# Ducky parameter
+DUCKY:
+  LAYERS: ['BM', 'IHC']   # 'BM', 'IHC'
+  SR: 44100
+  ONSET: True             # True: onset-window only, False: full signal (DuckyItdModel only)
+  BM:
+    fmin: 125
+    fmax: 16000
+    bw: 0.5
+    order: 4
+    filter_coeff_dir: './models/filter_coeff_dir'
+#    filter_coeff_dir: './filter_coeff_dir'
+  IHC:
+    fcut: 4000
+    order: 1
+    filter_coeff_dir: './models/filter_coeff_dir'
+#    filter_coeff_dir: './filter_coeff_dir'
+  CORR:
+    phy_ITD_range: [-1.5e-3, 1.5e-3]
+
+# Yang parameter
+YANG:
+  YANG_INPUT_DIM: 8928   # 24 * 12 * 31 for Yang input
+  SR: 44100
+  SR_RES: 4000
+  HIDDEN_DIM_1: 1024
+  HIDDEN_DIM_2: 512
+
+YANGMLP:
+  YANG_INPUT_DIM: 8928  # 24 * 12 * 31 for Yang input
+  HIDDEN_DIM_1: 1050    # 75 * 14
+  HIDDEN_DIM_2: 350

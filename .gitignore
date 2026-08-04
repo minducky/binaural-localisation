@@ -1,0 +1,48 @@
+# Ignore everything
+*
+
+# But not directories (so we can recurse into them)
+!*/
+
+# Allow Python source files
+!*.py
+
+# Allow Jupyter notebooks
+!*.ipynb
+
+# Allow YAML configs
+!*.yaml
+!*.yml
+
+# Allow this .gitignore itself
+!.gitignore
+
+# Exclude vendored reference code
+z_ref_phaselocknet/
+
+# Exclude compiled Python and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Exclude data, model weights, plots, etc.
+*.wav
+*.mp3
+*.npy
+*.npz
+*.mat
+*.h5
+*.hdf5
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.csv
+*.json
+*.txt
+*.DS_Store

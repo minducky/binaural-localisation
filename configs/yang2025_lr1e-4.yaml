@@ -1,0 +1,51 @@
+
+## Multiple Experiment Settings
+EXPERIMENTS_PURPOSE: 'Yang2025'
+EXPERIMENT_CONFIGS:
+  DESCRIPTION: ['Yang2025_lr1e-4'] # ['MLP_1', 'MLP_2', 'MLP_3']
+  MODEL: ['YangMLP']
+  GPU_NUM: [0]
+  DEBUG: [False]
+CACHE_SIZE:
+  TRAIN: 80
+  VAL: 20
+  EVAL: 10
+
+
+## DIRECTORY
+#DATASET_DIR: '/iridisfs/vlcgroup/dm1u25/Saddler'
+DATASET_DIR: '/scratch/dm1u25/dataset/Saddler'
+EI_DATASET_DIR: '/scratch/dm1u25/dataset/Saddler_EI'
+RESULTS_DIR: '/home/dm1u25/BSL_Saddler/results'
+
+## MODEL
+INPUT_DIM: 8928   # 24 * 12 * 31
+NUM_CLASSES: 504  # 72 azimuths × 7 elevations = 504 classes
+MODEL: 'Yang'
+
+## RANDOM_SEED
+RANDOM_SEED: 42
+
+## DESCRIPTION WHEN SINGLE EXPERIMENT (Not used usually)
+DESCRIPTION: 'debug'
+
+## TRAIN SETTING
+DEBUG: False
+DEBUG_CONFIG:
+  TRAIN_DATASET_SIZE: 32
+  VAL_DATASET_SIZE: 32
+  EVAL_DATASET_SIZE: 32
+  CACHE_SIZE:
+    TRAIN: 1
+    VAL: 1
+    EVAL: 1
+  BATCH_SIZE: 32
+  NUM_EPOCHS: 10
+  PATIENCE: 10
+BATCH_SIZE: 32
+LEARNING_RATE: 0.0001
+GPU_NUM: 0
+NUM_WORKERS: 12
+NUM_EPOCHS: 500
+PATIENCE: 50
+INIT_EPOCH: 50
