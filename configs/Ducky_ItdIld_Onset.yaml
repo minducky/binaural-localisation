@@ -24,7 +24,7 @@ CERTAIN_ANGLE_FILTER:
 ## DIRECTORY
 DATASET_DIR: '/scratch/dm1u25/dataset/Saddler'
 EI_DATASET_DIR: '/scratch/dm1u25/dataset/Saddler_EI'
-RESULTS_DIR: '/home/dm1u25/BSL_Saddler/results'
+RESULTS_DIR: '/home/dm1u25/binaural-localisation/results'
 FILTER_COEFF_DIR: './models/filter_coeff_dir'
 
 ## RANDOM_SEED

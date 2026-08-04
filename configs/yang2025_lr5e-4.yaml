@@ -16,7 +16,7 @@ CACHE_SIZE:
 #DATASET_DIR: '/iridisfs/vlcgroup/dm1u25/Saddler'
 DATASET_DIR: '/scratch/dm1u25/dataset/Saddler'
 EI_DATASET_DIR: '/scratch/dm1u25/dataset/Saddler_EI'
-RESULTS_DIR: '/home/dm1u25/BSL_Saddler/results'
+RESULTS_DIR: '/home/dm1u25/binaural-localisation/results'
 
 ## MODEL
 INPUT_DIM: 8928   # 24 * 12 * 31
