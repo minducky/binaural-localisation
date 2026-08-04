@@ -29,7 +29,7 @@ def main():
         df_subj = df_subj.sort_values('snr')
 
         wandb.init(
-            project='BSL_Saddler',
+            project='binaural-localisation',
             group='human_saddler_2023',
             name=f'human_{subject}',
             reinit=True,
