@@ -9,6 +9,33 @@ import psutil
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 
+# Nested, proportional train-subset ratios for data-efficiency experiments:
+# DATASET_MODE is 'Total' (no filtering) or one of these keys.
+TRAIN_SUBSET_RATIOS = {
+    "50%": 0.50,
+    "25%": 0.25,
+    "10%": 0.10,
+    "5%": 0.05,
+    "2%": 0.02,
+}
+
+
+def subset_slug(dataset_mode: str) -> str:
+    """Converts a train-subset ratio key (e.g. '2%') to a filename-safe slug.
+
+    Args:
+        dataset_mode: A key of ``TRAIN_SUBSET_RATIOS``, e.g. '2%'.
+
+    Returns:
+        A filesystem-safe slug, e.g. '2pct'.
+    """
+    if dataset_mode not in TRAIN_SUBSET_RATIOS:
+        raise ValueError(
+            f"Unknown train-subset DATASET_MODE {dataset_mode!r}; expected "
+            f"'Total' or one of {sorted(TRAIN_SUBSET_RATIOS)}"
+        )
+    return dataset_mode.rstrip("%") + "pct"
+
 
 def print_cpu_mem(tag: str = "") -> None:
     """Prints current process/system memory usage, prefixed with ``tag``."""
@@ -31,8 +58,7 @@ class BinauralDataset(Dataset):
         """Loads/builds the angle-to-class mapping and indexes samples.
 
         Args:
-            config: Experiment config dict (``DATASET_DIR``, ``DATASET_MODE``,
-                and ``CERTAIN_ANGLE_FILTER`` when applicable).
+            config: Experiment config dict (``DATASET_DIR``, ``DATASET_MODE``).
             mode: Dataset split subdirectory (e.g. 'train', 'valid', or an
                 eval split name).
             cache_size: Number of HDF5 files to preload into RAM.
@@ -45,30 +71,12 @@ class BinauralDataset(Dataset):
             f for f in os.listdir(self.data_dir) if f.startswith("stim")
         )
 
-        # DATASET_MODE: 'Total' (no filter) or 'Certain' (eval-range only,
-        # train/val only)
+        # DATASET_MODE: 'Total' (no filter) or a TRAIN_SUBSET_RATIOS key
+        # (e.g. '2%') selecting a precomputed, class-balanced train subset.
+        # The class space itself never changes with DATASET_MODE, so a
+        # single mapping dir is shared regardless of the chosen ratio.
         dataset_mode = config["DATASET_MODE"]
-        if dataset_mode == "Certain" and "eval" not in mode:
-            af = config["CERTAIN_ANGLE_FILTER"]
-            self.allowed_azims = self._build_allowed_azims(
-                af["AZIM_RANGE"], af["AZIM_STEP"]
-            )
-            self.allowed_elevs = set(
-                float(e)
-                for e in np.arange(
-                    af["ELEV_RANGE"][0],
-                    af["ELEV_RANGE"][1] + af["ELEV_STEP"],
-                    af["ELEV_STEP"],
-                )
-            )
-        else:
-            self.allowed_azims = None  # None = no filter
-            self.allowed_elevs = None
-
-        # Separate mapping dirs per mode so Total/Certain don't overwrite each other
-        self.mapping_dir = os.path.join(
-            config["DATASET_DIR"], f"global_class_mapping_{dataset_mode.lower()}"
-        )
+        self.mapping_dir = os.path.join(config["DATASET_DIR"], "global_class_mapping")
 
         # Build or load angle-to-class mappings
         if global_class_mapping is not None:
@@ -83,39 +91,57 @@ class BinauralDataset(Dataset):
         else:
             self._load_or_build_angle_mappings()
 
-        self.index_map = []
-        signal_count = 0
-        normal_snr_count = 0
-        for h5_fname in self.h5_fnames:
-            with h5py.File(os.path.join(self.data_dir, h5_fname), "r") as f:
-                # train/val mode
-                if "eval" not in mode:
-                    n_samples = len(f["signal"])
-                    azims = f["foreground_azim"][:]
-                    elevs = f["foreground_elev"][:]
-                    for i in range(n_samples):
-                        if self.allowed_azims is None or (
-                            float(azims[i]) in self.allowed_azims
-                            and float(elevs[i]) in self.allowed_elevs
-                        ):
+        use_subset = dataset_mode != "Total" and mode == "train"
+        if use_subset:
+            subset_fpath = os.path.join(
+                config["DATASET_DIR"],
+                "train_subsets",
+                f"subset_{subset_slug(dataset_mode)}.hdf5",
+            )
+            with h5py.File(subset_fpath, "r") as f:
+                h5_fnames = [
+                    name.decode() if isinstance(name, bytes) else name
+                    for name in f["h5_fname"][:]
+                ]
+                sample_idxs = f["sample_idx"][:].tolist()
+            self.index_map = list(zip(h5_fnames, sample_idxs, strict=True))
+            # Narrow to just the files the subset actually references, so
+            # _fill_cache() below warms the cache with files that matter
+            # instead of an arbitrary prefix of the full directory listing.
+            self.h5_fnames = sorted(set(h5_fnames))
+            print(
+                f" - Loaded train subset {dataset_mode!r} from {subset_fpath}: "
+                f"{len(self.index_map)} samples across {len(self.h5_fnames)} files"
+            )
+        else:
+            self.index_map = []
+            signal_count = 0
+            normal_snr_count = 0
+            for h5_fname in self.h5_fnames:
+                with h5py.File(os.path.join(self.data_dir, h5_fname), "r") as f:
+                    # train/val mode
+                    if "eval" not in mode:
+                        n_samples = len(f["signal"])
+                        for i in range(n_samples):
                             self.index_map.append((h5_fname, i))
-                # evaluation mode
-                elif "eval" in mode:
-                    n_samples = len(f["signal"])
-                    snr = f["snr"][:]
-                    for i in range(n_samples):
-                        signal_count += 1
-                        if not np.isinf(snr[i]):  # Exclude when SNR is inf
-                            self.index_map.append((h5_fname, i))
-                            normal_snr_count += 1
-                    if h5_fname == self.h5_fnames[-1]:
-                        excluded_count = signal_count - normal_snr_count
-                        print(
-                            f"- len of original evaluation set : {signal_count}\n"
-                            f"    - len of normal snr evaluation set : "
-                            f"{normal_snr_count}\n"
-                            f"    - excluded inf snr sample num : {excluded_count}\n"
-                        )
+                    # evaluation mode
+                    elif "eval" in mode:
+                        n_samples = len(f["signal"])
+                        snr = f["snr"][:]
+                        for i in range(n_samples):
+                            signal_count += 1
+                            if not np.isinf(snr[i]):  # Exclude when SNR is inf
+                                self.index_map.append((h5_fname, i))
+                                normal_snr_count += 1
+                        if h5_fname == self.h5_fnames[-1]:
+                            excluded_count = signal_count - normal_snr_count
+                            print(
+                                f"- len of original evaluation set : {signal_count}\n"
+                                f"    - len of normal snr evaluation set : "
+                                f"{normal_snr_count}\n"
+                                f"    - excluded inf snr sample num : "
+                                f"{excluded_count}\n"
+                            )
 
         self.cache = {}
         self.cache_size = cache_size
@@ -126,16 +152,6 @@ class BinauralDataset(Dataset):
         print(f" - Dataset mode : {mode} / {self.total_length} samples")
         print(f" - Number of classes: {len(self.class_to_angle)}")
         self._fill_cache()
-
-    @staticmethod
-    def _build_allowed_azims(azim_range: list[float], step: float) -> set[float]:
-        """Build allowed azimuth set from two ranges, e.g. [270, 360, 0, 90]."""
-        result = set()
-        for a in np.arange(azim_range[0], azim_range[1], step):  # e.g. 270–359
-            result.add(float(a))
-        for a in np.arange(azim_range[2], azim_range[3] + step, step):  # e.g. 0–90
-            result.add(float(a))
-        return result
 
     def _load_or_build_angle_mappings(self) -> None:
         """Load class mapping from file if exists, otherwise build and save"""
@@ -166,12 +182,8 @@ class BinauralDataset(Dataset):
                     for a, e in zip(
                         f["foreground_azim"][:], f["foreground_elev"][:], strict=True
                     ):
-                        a, e = float(a), float(e)
-                        if self.allowed_azims is None or (
-                            a in self.allowed_azims and e in self.allowed_elevs
-                        ):
-                            unique_azims.add(a)
-                            unique_elevs.add(e)
+                        unique_azims.add(float(a))
+                        unique_elevs.add(float(e))
 
             self.azim_values = sorted(list(unique_azims))
             self.elev_values = sorted(list(unique_elevs))
@@ -284,14 +296,19 @@ class EIDataset(Dataset):
         class_mapping_path: str | None = None,
         global_class_mapping: dict | None = None,
     ):
-        """Loads precomputed EI features and applies optional angle filtering.
+        """Loads precomputed EI features.
 
         Args:
-            h5_path: Path to precomputed EI HDF5 file (e.g. train_ei.hdf5)
-            config: Config dict; if provided, DATASET_MODE / Certain
-                filtering is applied
-            mode: Dataset split string (e.g. 'train', 'valid', 'eval');
-                required when config is given
+            h5_path: Path to a precomputed EI HDF5 file. For a train-subset
+                ``DATASET_MODE``, the caller passes the corresponding
+                ``train_subsets/subset_{slug}.hdf5`` path (already restricted
+                to that ratio's samples — see ``yang/precompute_subset_ei.py``)
+                instead of the full ``train_ei.hdf5``, so no filtering
+                happens in this class.
+            config: Unused; kept for call-site symmetry with
+                ``BinauralDataset``.
+            mode: Dataset split string (e.g. 'train', 'valid', 'eval'), used
+                only for logging.
             class_mapping_path: Path to class_mapping.hdf5 (used if
                 global_class_mapping is None)
             global_class_mapping: Optional dict with class mappings (same
@@ -308,39 +325,6 @@ class EIDataset(Dataset):
         print(
             f" - Loaded {len(self.class_idx)} samples, EI shape: {self.signal_ei.shape}"
         )
-
-        # DATASET_MODE: 'Total' (no filter) or 'Certain' (eval-range only,
-        # train/val only)
-        if (
-            config is not None
-            and config["DATASET_MODE"] == "Certain"
-            and mode is not None
-            and "eval" not in mode
-        ):
-            af = config["CERTAIN_ANGLE_FILTER"]
-            allowed_azims = BinauralDataset._build_allowed_azims(
-                af["AZIM_RANGE"], af["AZIM_STEP"]
-            )
-            allowed_elevs = set(
-                float(e)
-                for e in np.arange(
-                    af["ELEV_RANGE"][0],
-                    af["ELEV_RANGE"][1] + af["ELEV_STEP"],
-                    af["ELEV_STEP"],
-                )
-            )
-            mask = np.array(
-                [
-                    float(a) in allowed_azims and float(e) in allowed_elevs
-                    for a, e in zip(self.azim, self.elev, strict=True)
-                ]
-            )
-            self.signal_ei = self.signal_ei[mask]
-            self.class_idx = self.class_idx[mask]
-            self.azim = self.azim[mask]
-            self.elev = self.elev[mask]
-            self.snr = self.snr[mask]
-            print(f" - Certain mode applied: {mask.sum()} / {len(mask)} samples kept")
 
         self.total_length = len(self.class_idx)
         print(f" - Dataset mode : {mode} / {self.total_length} samples")
@@ -460,15 +444,17 @@ def setup_develop_dataloaders(config: dict) -> tuple[dict, dict]:
     if use_ei:
         ei_dir = config["EI_DATASET_DIR"]
         dataset_mode = config["DATASET_MODE"]
-        class_mapping_path = os.path.join(
-            ei_dir, f"class_mapping_{dataset_mode.lower()}.hdf5"
-        )
-        if not os.path.exists(class_mapping_path):  # fallback to default mapping
-            class_mapping_path = os.path.join(ei_dir, "class_mapping.hdf5")
+        class_mapping_path = os.path.join(ei_dir, "class_mapping.hdf5")
+        if dataset_mode == "Total":
+            train_ei_path = os.path.join(ei_dir, "train_ei.hdf5")
+        else:
+            train_ei_path = os.path.join(
+                ei_dir, "train_subsets", f"subset_{subset_slug(dataset_mode)}.hdf5"
+            )
         print("\n [[[ Training ]]] ")
         print_cpu_mem(" - Before Setting EI Dataset")
         train_dataset = EIDataset(
-            os.path.join(ei_dir, "train_ei.hdf5"),
+            train_ei_path,
             config=config,
             mode="train",
             class_mapping_path=class_mapping_path,
