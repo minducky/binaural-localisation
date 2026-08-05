@@ -2,8 +2,15 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from auditory_layers.cochlear import BM, IHC
+from auditory_layers.midbrain import (
+    ILD,
+    AvgILD,
+    Correlagram,
+    ILDNormaliser,
+    ITDNormaliser,
+    OnsetSlicer,
+)
 from torch.profiler import record_function
 
 
@@ -76,143 +83,48 @@ class PeripheralFrontend(nn.Module):
         return x_l, x_r
 
 
-class Correlagram(nn.Module):
-    """Normalized FFT-based interaural cross-correlation (ITD) map."""
-
-    def __init__(self, sr: float, phy_ITD_range: list[float], eps: float = 1e-8):
-        """Configures the correlagram.
-
-        Args:
-            sr: Sampling rate (Hz) of the peripheral response inputs.
-            phy_ITD_range: [min, max] physical ITD range in seconds.
-            eps: Small constant to avoid division by zero when normalizing.
-        """
-        super().__init__()
-        self.phy_ITD_range_in_samples = [int(i * sr) for i in phy_ITD_range]
-        self.eps = eps
-
-    def forward(self, peri_l: torch.Tensor, peri_r: torch.Tensor) -> torch.Tensor:
-        """Computes the normalized cross-correlation over the ITD range.
-
-        Args:
-            peri_l: Left peripheral response of shape (B, F, T).
-            peri_r: Right peripheral response of shape (B, F, T).
-
-        Returns:
-            Cross-correlation map of shape (B, 1, F, ITD_bins).
-        """
-        # peri_l/r: (B, F, T)
-        B, Freq, T = peri_l.shape
-
-        ITD_bins = (
-            self.phy_ITD_range_in_samples[1] - self.phy_ITD_range_in_samples[0] + 1
-        )
-
-        gamma_l_pad = F.pad(
-            peri_l,
-            (-self.phy_ITD_range_in_samples[0], self.phy_ITD_range_in_samples[1]),
-        )
-        T_pad = gamma_l_pad.shape[-1]
-        nfft = 2 ** (T_pad + T - 1).bit_length()
-
-        L = torch.fft.rfft(gamma_l_pad, n=nfft)
-        R = torch.fft.rfft(peri_r, n=nfft)
-
-        corr = torch.fft.irfft(L * R.conj(), n=nfft)[..., :ITD_bins]  # (B, F, ITD_bins)
-
-        norm_l = peri_l.pow(2).sum(dim=-1, keepdim=True).sqrt()
-        norm_r = peri_r.pow(2).sum(dim=-1, keepdim=True).sqrt()
-        corr = corr / (norm_l * norm_r + self.eps)
-
-        return corr.unsqueeze(1)  # (B, 1, F, ITD_bins)
-
-
-class ILD(nn.Module):
-    """Interaural level difference, as a clamped normalized dB ratio."""
-
-    def __init__(self, eps: float = 1e-8):
-        """Configures the ILD stage.
-
-        Args:
-            eps: Small constant to avoid log(0) when clamping.
-        """
-        super().__init__()
-        self.eps = eps
-
-    def forward(self, peri_l: torch.Tensor, peri_r: torch.Tensor) -> torch.Tensor:
-        """Computes the ILD map.
-
-        Args:
-            peri_l: Left peripheral response of shape (B, F, T).
-            peri_r: Right peripheral response of shape (B, F, T).
-
-        Returns:
-            ILD map in [-1, 1] (dB ratio / 20, clamped) of shape (B, 1, F, T).
-        """
-        # peri_l/r: (B, F, T)
-        ild_db = 20.0 * (
-            torch.log10(peri_l.clamp(min=self.eps))
-            - torch.log10(peri_r.clamp(min=self.eps))
-        )
-        return ((ild_db / 20.0).clamp(-1.0, 1.0)).unsqueeze(1)  # (B, 1, F, T)
-
-
-def detect_onset_and_slice(
-    x_l: torch.Tensor, x_r: torch.Tensor, stride: int, t_window: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Detects sound onset and slices signals to the onset window.
-
-    Slices both the original and avg-pooled left/right signals.
+def _compute_itd_map(
+    corr_module: Correlagram,
+    itd_normaliser: ITDNormaliser,
+    x_l: torch.Tensor,
+    x_r: torch.Tensor,
+) -> torch.Tensor:
+    """Computes a normalized ITD map ready for a 2D conv encoder.
 
     Args:
-        x_l: Left channel signal of shape (B, F, T).
-        x_r: Right channel signal of shape (B, F, T).
-        stride: Avg-pool window/stride in samples (e.g. int(0.005 * sr)).
-        t_window: Slice length in samples (e.g. int(0.05 * sr)).
+        corr_module: Cross-correlation module.
+        itd_normaliser: Normaliser applied to ``corr_module``'s output.
+        x_l: Left peripheral response of shape (B, F, T).
+        x_r: Right peripheral response of shape (B, F, T).
 
     Returns:
-        A tuple ``(x_l_slice, x_r_slice, x_l_avg_slice, x_r_avg_slice)``:
-        the sliced original signals, each of shape (B, F, t_window), and
-        the sliced avg-pooled signals, each of shape
-        (B, F, t_window // stride).
+        Normalized ITD map of shape (B, 1, F, ITD_bins).
     """
-    B, Freq, T = x_l.shape
+    corr = corr_module(x_l, x_r)
+    return itd_normaliser(corr, x_l, x_r).unsqueeze(1)
 
-    # avg_pool2d requires 4D input
-    x_l_avg = F.avg_pool2d(
-        x_l.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-    ).squeeze(1)
-    x_r_avg = F.avg_pool2d(
-        x_r.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-    ).squeeze(1)
-    # (B, F, T_avg)
 
-    x_l_diff = torch.diff(x_l_avg, dim=-1)  # (B, F, T_avg-1)
-    x_r_diff = torch.diff(x_r_avg, dim=-1)
-    x_mean = x_l_diff.mean(dim=-2) * x_r_diff.mean(dim=-2)  # (B, T_avg-1)
-    skip = 1
-    onset_frame = torch.argmax(x_mean[:, skip:], dim=-1) + skip  # (B,)
+def _compute_ild_map(
+    ild_module: ILD | AvgILD,
+    ild_normaliser: ILDNormaliser,
+    x_l: torch.Tensor,
+    x_r: torch.Tensor,
+) -> torch.Tensor:
+    """Computes a normalized ILD map ready for a 2D conv encoder.
 
-    t_window_avg = t_window // stride
+    Args:
+        ild_module: ``ILD`` (for already avg-pooled inputs) or ``AvgILD``
+            (which avg-pools internally) instance.
+        ild_normaliser: Normaliser applied to ``ild_module``'s output.
+        x_l: Left peripheral response of shape (B, F, T).
+        x_r: Right peripheral response of shape (B, F, T).
 
-    onset_sample = torch.clamp(onset_frame * stride, 0, T - t_window)
-    onset_frame = torch.clamp(onset_frame, 0, x_l_avg.shape[-1] - t_window_avg)
-
-    offsets = torch.arange(t_window, device=x_l.device)
-    indices = (onset_sample[:, None] + offsets[None, :])[:, None, :].expand(
-        B, Freq, t_window
-    )
-    x_l_slice = torch.gather(x_l, -1, indices)
-    x_r_slice = torch.gather(x_r, -1, indices)
-
-    offsets_avg = torch.arange(t_window_avg, device=x_l.device)
-    indices_avg = (onset_frame[:, None] + offsets_avg[None, :])[:, None, :].expand(
-        B, Freq, t_window_avg
-    )
-    x_l_avg_slice = torch.gather(x_l_avg, -1, indices_avg)
-    x_r_avg_slice = torch.gather(x_r_avg, -1, indices_avg)
-
-    return x_l_slice, x_r_slice, x_l_avg_slice, x_r_avg_slice
+    Returns:
+        Normalized ILD map of shape (B, 1, F, T') where T' depends on
+        ``ild_module``.
+    """
+    ild = ild_module(x_l, x_r)
+    return ild_normaliser(ild).unsqueeze(1)
 
 
 # %% Encoder building blocks
@@ -352,8 +264,11 @@ class DuckyItdModel(nn.Module):
 
         self.peripheral = PeripheralFrontend(config)
         self.CORR = Correlagram(
-            sr=sr, phy_ITD_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
+        self.itd_normaliser = ITDNormaliser()
+        if self.use_onset:
+            self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
 
         self.ITD_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
 
@@ -370,12 +285,10 @@ class DuckyItdModel(nn.Module):
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
         if self.use_onset:
-            stride = int(0.005 * self.sr)
-            t_window = int(0.050 * self.sr)
-            x_l, x_r, _, _ = detect_onset_and_slice(x_l, x_r, stride, t_window)
+            x_l, x_r, _, _ = self.onset_slicer(x_l, x_r)
 
         with record_function("CORR"):
-            ITD = self.CORR(x_l, x_r)  # (B, 1, F, ITD_bins)
+            ITD = _compute_itd_map(self.CORR, self.itd_normaliser, x_l, x_r)
 
         with record_function("Classifier"):
             return self.Classifier(self.ITD_Encoder(ITD))
@@ -394,7 +307,9 @@ class DuckyIldOnsetModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
-        self.ILD = ILD()
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
+        self.ild_module = ILD(eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
         self.ILD_Encoder = (
             _make_ild_onset_encoder()
         )  # (B, 1, F, t_window//stride) → (B, 256)
@@ -411,13 +326,11 @@ class DuckyIldOnsetModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)
 
-        stride = int(0.005 * self.sr)
-        t_window = int(0.050 * self.sr)
-        _, _, x_l_avg_onset, x_r_avg_onset = detect_onset_and_slice(
-            x_l, x_r, stride, t_window
-        )
+        _, _, x_l_avg_onset, x_r_avg_onset = self.onset_slicer(x_l, x_r)
 
-        ILD_map = self.ILD(x_l_avg_onset, x_r_avg_onset)  # (B, 1, F, t_window//stride)
+        ILD_map = _compute_ild_map(
+            self.ild_module, self.ild_normaliser, x_l_avg_onset, x_r_avg_onset
+        )  # (B, 1, F, t_window//stride)
 
         with record_function("Classifier"):
             return self.Classifier(self.ILD_Encoder(ILD_map))
@@ -436,7 +349,8 @@ class DuckyIldWholeModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
-        self.ILD = ILD()
+        self.avg_ild = AvgILD(avg=int(0.005 * sr), eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
         self.ILD_Encoder = _make_ild_whole_encoder()  # (B, 1, F, T//stride) → (B, 256)
 
         self.Classifier = nn.Sequential(
@@ -451,15 +365,9 @@ class DuckyIldWholeModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)
 
-        stride = int(0.005 * self.sr)
-        x_l_avg = F.avg_pool2d(
-            x_l.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-        x_r_avg = F.avg_pool2d(
-            x_r.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-
-        ILD_map = self.ILD(x_l_avg, x_r_avg)  # (B, 1, F, T//stride)
+        ILD_map = _compute_ild_map(
+            self.avg_ild, self.ild_normaliser, x_l, x_r
+        )  # (B, 1, F, T//stride)
 
         with record_function("Classifier"):
             return self.Classifier(self.ILD_Encoder(ILD_map))
@@ -479,9 +387,11 @@ class DuckyItdIldWholeModel(nn.Module):
 
         self.peripheral = PeripheralFrontend(config)
         self.CORR = Correlagram(
-            sr=sr, phy_ITD_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
-        self.ILD = ILD()
+        self.itd_normaliser = ITDNormaliser()
+        self.avg_ild = AvgILD(avg=int(0.005 * sr), eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
 
         self.ITD_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
         self.ILD_Encoder = _make_ild_whole_encoder()  # (B, 1, F, T//stride) → (B, 256)
@@ -498,16 +408,12 @@ class DuckyItdIldWholeModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)
 
-        stride = int(0.005 * self.sr)
-        x_l_avg = F.avg_pool2d(
-            x_l.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-        x_r_avg = F.avg_pool2d(
-            x_r.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-
-        ITD_map = self.CORR(x_l, x_r)  # (B, 1, F, ITD_bins)
-        ILD_map = self.ILD(x_l_avg, x_r_avg)  # (B, 1, F, T//stride)
+        ITD_map = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l, x_r
+        )  # (B, 1, F, ITD_bins)
+        ILD_map = _compute_ild_map(
+            self.avg_ild, self.ild_normaliser, x_l, x_r
+        )  # (B, 1, F, T//stride)
 
         feat = torch.cat(
             [
@@ -534,10 +440,13 @@ class DuckyModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
         self.CORR = Correlagram(
-            sr=sr, phy_ITD_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
-        self.ILD = ILD()
+        self.itd_normaliser = ITDNormaliser()
+        self.ild_module = ILD(eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
 
         self.ITD_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
         self.ILD_Encoder = (
@@ -556,16 +465,15 @@ class DuckyModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
-        stride = int(0.005 * self.sr)
-        t_window = int(0.050 * self.sr)
-
         with record_function("CORR"):
-            x_l_onset, x_r_onset, x_l_avg, x_r_avg = detect_onset_and_slice(
-                x_l, x_r, stride, t_window
-            )
+            x_l_onset, x_r_onset, x_l_avg, x_r_avg = self.onset_slicer(x_l, x_r)
 
-        ITD_map = self.CORR(x_l_onset, x_r_onset)  # (B, 1, F, ITD_bins)
-        ILD_map = self.ILD(x_l_avg, x_r_avg)  # (B, 1, F, t_window//stride)
+        ITD_map = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l_onset, x_r_onset
+        )  # (B, 1, F, ITD_bins)
+        ILD_map = _compute_ild_map(
+            self.ild_module, self.ild_normaliser, x_l_avg, x_r_avg
+        )  # (B, 1, F, t_window//stride)
 
         with record_function("ITD_Encoder"):
             ITD_feature = self.ITD_Encoder(ITD_map)  # (B, 256)
@@ -589,9 +497,11 @@ class DuckyItdMultiScaleModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
         self.CORR = Correlagram(
-            sr=sr, phy_ITD_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
+        self.itd_normaliser = ITDNormaliser()
 
         self.ITD_onset_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
         self.ITD_whole_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
@@ -608,13 +518,14 @@ class DuckyItdMultiScaleModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
-        stride = int(0.005 * self.sr)
-        t_window = int(0.050 * self.sr)
+        x_l_onset, x_r_onset, _, _ = self.onset_slicer(x_l, x_r)
 
-        x_l_onset, x_r_onset, _, _ = detect_onset_and_slice(x_l, x_r, stride, t_window)
-
-        ITD_onset = self.CORR(x_l_onset, x_r_onset)  # (B, 1, F, ITD_bins)
-        ITD_whole = self.CORR(x_l, x_r)  # (B, 1, F, ITD_bins)
+        ITD_onset = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l_onset, x_r_onset
+        )  # (B, 1, F, ITD_bins)
+        ITD_whole = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l, x_r
+        )  # (B, 1, F, ITD_bins)
 
         feat = torch.cat(
             [
@@ -641,7 +552,10 @@ class DuckyIldMultiScaleModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
-        self.ILD = ILD()
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
+        self.ild_module = ILD(eps=1e-8)
+        self.avg_ild = AvgILD(avg=int(0.005 * sr), eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
 
         self.ILD_onset_Encoder = (
             _make_ild_onset_encoder()
@@ -662,23 +576,14 @@ class DuckyIldMultiScaleModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
-        stride = int(0.005 * self.sr)
-        t_window = int(0.050 * self.sr)
+        _, _, x_l_avg_onset, x_r_avg_onset = self.onset_slicer(x_l, x_r)
 
-        _, _, x_l_avg_onset, x_r_avg_onset = detect_onset_and_slice(
-            x_l, x_r, stride, t_window
-        )
-        x_l_avg_whole = F.avg_pool2d(
-            x_l.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-        x_r_avg_whole = F.avg_pool2d(
-            x_r.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-
-        ILD_onset = self.ILD(
-            x_l_avg_onset, x_r_avg_onset
+        ILD_onset = _compute_ild_map(
+            self.ild_module, self.ild_normaliser, x_l_avg_onset, x_r_avg_onset
         )  # (B, 1, F, t_window//stride)
-        ILD_whole = self.ILD(x_l_avg_whole, x_r_avg_whole)  # (B, 1, F, T//stride)
+        ILD_whole = _compute_ild_map(
+            self.avg_ild, self.ild_normaliser, x_l, x_r
+        )  # (B, 1, F, T//stride)
 
         feat = torch.cat(
             [
@@ -705,10 +610,14 @@ class DuckyMultiScaleModel(nn.Module):
         self.sr = sr
 
         self.peripheral = PeripheralFrontend(config)
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
         self.CORR = Correlagram(
-            sr=sr, phy_ITD_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
-        self.ILD = ILD()
+        self.itd_normaliser = ITDNormaliser()
+        self.ild_module = ILD(eps=1e-8)
+        self.avg_ild = AvgILD(avg=int(0.005 * sr), eps=1e-8)
+        self.ild_normaliser = ILDNormaliser()
 
         self.ITD_onset_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
         self.ITD_whole_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
@@ -731,25 +640,20 @@ class DuckyMultiScaleModel(nn.Module):
 
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
-        stride = int(0.005 * self.sr)
-        t_window = int(0.050 * self.sr)
+        x_l_onset, x_r_onset, x_l_avg_onset, x_r_avg_onset = self.onset_slicer(x_l, x_r)
 
-        x_l_onset, x_r_onset, x_l_avg_onset, x_r_avg_onset = detect_onset_and_slice(
-            x_l, x_r, stride, t_window
-        )
-        x_l_avg_whole = F.avg_pool2d(
-            x_l.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-        x_r_avg_whole = F.avg_pool2d(
-            x_r.unsqueeze(1), kernel_size=(1, stride), stride=(1, stride)
-        ).squeeze(1)
-
-        ITD_onset = self.CORR(x_l_onset, x_r_onset)  # (B, 1, F, ITD_bins)
-        ITD_whole = self.CORR(x_l, x_r)  # (B, 1, F, ITD_bins)
-        ILD_onset = self.ILD(
-            x_l_avg_onset, x_r_avg_onset
+        ITD_onset = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l_onset, x_r_onset
+        )  # (B, 1, F, ITD_bins)
+        ITD_whole = _compute_itd_map(
+            self.CORR, self.itd_normaliser, x_l, x_r
+        )  # (B, 1, F, ITD_bins)
+        ILD_onset = _compute_ild_map(
+            self.ild_module, self.ild_normaliser, x_l_avg_onset, x_r_avg_onset
         )  # (B, 1, F, t_window//stride)
-        ILD_whole = self.ILD(x_l_avg_whole, x_r_avg_whole)  # (B, 1, F, T//stride)
+        ILD_whole = _compute_ild_map(
+            self.avg_ild, self.ild_normaliser, x_l, x_r
+        )  # (B, 1, F, T//stride)
 
         feat = torch.cat(
             [
