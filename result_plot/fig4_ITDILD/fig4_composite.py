@@ -24,7 +24,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 sys.path.insert(0, PROJECT_ROOT)
 
 from models.ducky import BM, IHC, Correlagram, ILD
-from models.peripheral import audspace_bw
+from auditory_layers.cochlear import audspace_bw
 
 FILTER_COEFF_DIR = os.path.join(PROJECT_ROOT, 'models', 'filter_coeff_dir')
 TRAIN_DIR        = os.path.join(PROJECT_ROOT, 'binaural_samples', 'train')

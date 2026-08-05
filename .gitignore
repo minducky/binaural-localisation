@@ -17,6 +17,9 @@
 # Allow this .gitignore itself
 !.gitignore
 
+# Allow project metadata/tooling config
+!pyproject.toml
+
 # Exclude vendored reference code
 z_ref_phaselocknet/
 
