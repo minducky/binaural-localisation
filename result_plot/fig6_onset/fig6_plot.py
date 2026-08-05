@@ -26,8 +26,9 @@ import matplotlib.gridspec as gridspec
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, PROJECT_ROOT)
 
-from models.ducky import BM, IHC, Correlagram, ILD, detect_onset_and_slice
+from models.ducky import BM, IHC
 from auditory_layers.cochlear import audspace_bw
+from auditory_layers.midbrain import Correlagram, ILD, ILDNormaliser, OnsetSlicer
 
 FILTER_COEFF_DIR = os.path.join(PROJECT_ROOT, 'models', 'filter_coeff_dir')
 TRAIN_DIR        = os.path.join(PROJECT_ROOT, 'binaural_samples', 'train')
@@ -66,8 +67,10 @@ with warnings.catch_warnings():
                     filter_coeff_dir=FILTER_COEFF_DIR, learnable_coefficients=False)
     ihc_model  = IHC(fcut=IHC_FCUT, sr=SR, order=IHC_ORDER,
                      filter_coeff_dir=FILTER_COEFF_DIR)
-    corr_model = Correlagram(sr=SR, phy_ITD_range=PHY_ITD_RANGE)
+    corr_model = Correlagram(sr_res=SR, phy_itd_range=PHY_ITD_RANGE, normalise=True)
     ild_model  = ILD()
+    ild_normaliser = ILDNormaliser()
+    onset_slicer = OnsetSlicer(sr=SR, avg_window=0.005, slice_window=0.050)
 
 for m in (bm_model, ihc_model, corr_model, ild_model):
     m.eval()
@@ -90,23 +93,24 @@ def compute_maps(ihc_l, ihc_r):
     """Returns whole_itd, whole_ild, onset_itd, onset_ild — all numpy (F, *)."""
     # ── whole ──
     with torch.no_grad():
-        whole_itd = corr_model(ihc_l, ihc_r).squeeze(0).squeeze(0).numpy()  # (F, 133)
+        whole_itd = corr_model(ihc_l, ihc_r).squeeze(0).numpy()  # (F, 133)
 
     avg_l = F.avg_pool2d(ihc_l.unsqueeze(1),
                          kernel_size=(1, ILD_STRIDE), stride=(1, ILD_STRIDE)).squeeze(1)
     avg_r = F.avg_pool2d(ihc_r.unsqueeze(1),
                          kernel_size=(1, ILD_STRIDE), stride=(1, ILD_STRIDE)).squeeze(1)
     with torch.no_grad():
-        whole_ild = ild_model(avg_l, avg_r).squeeze(0).squeeze(0).numpy()   # (F, T_avg)
+        whole_ild = ild_normaliser(ild_model(avg_l, avg_r)).squeeze(0).numpy()   # (F, T_avg)
     whole_ild = whole_ild[:, :ILD_FRAMES]   # crop to 1 s
 
     # ── onset ──
-    x_l_onset, x_r_onset, x_l_avg_onset, x_r_avg_onset = detect_onset_and_slice(
-        ihc_l, ihc_r, stride=ILD_STRIDE, t_window=ONSET_WINDOW)
+    x_l_onset, x_r_onset, x_l_avg_onset, x_r_avg_onset = onset_slicer(ihc_l, ihc_r)
 
     with torch.no_grad():
-        onset_itd = corr_model(x_l_onset, x_r_onset).squeeze(0).squeeze(0).numpy()  # (F, 133)
-        onset_ild = ild_model(x_l_avg_onset, x_r_avg_onset).squeeze(0).squeeze(0).numpy()  # (F, 10)
+        onset_itd = corr_model(x_l_onset, x_r_onset).squeeze(0).numpy()  # (F, 133)
+        onset_ild = ild_normaliser(
+            ild_model(x_l_avg_onset, x_r_avg_onset)
+        ).squeeze(0).numpy()  # (F, 10)
 
     return whole_itd, whole_ild, onset_itd, onset_ild
 

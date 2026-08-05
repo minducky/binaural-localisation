@@ -23,8 +23,9 @@ import matplotlib.gridspec as gridspec
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, PROJECT_ROOT)
 
-from models.ducky import BM, IHC, Correlagram, ILD
+from models.ducky import BM, IHC
 from auditory_layers.cochlear import audspace_bw
+from auditory_layers.midbrain import Correlagram, ILD, ILDNormaliser
 
 FILTER_COEFF_DIR = os.path.join(PROJECT_ROOT, 'models', 'filter_coeff_dir')
 TRAIN_DIR        = os.path.join(PROJECT_ROOT, 'binaural_samples', 'train')
@@ -55,8 +56,9 @@ with warnings.catch_warnings():
                     filter_coeff_dir=FILTER_COEFF_DIR, learnable_coefficients=False)
     ihc_model  = IHC(fcut=IHC_FCUT, sr=SR, order=IHC_ORDER,
                      filter_coeff_dir=FILTER_COEFF_DIR)
-    corr_model = Correlagram(sr=SR, phy_ITD_range=PHY_ITD_RANGE)
+    corr_model = Correlagram(sr_res=SR, phy_itd_range=PHY_ITD_RANGE, normalise=True)
     ild_model  = ILD()
+    ild_normaliser = ILDNormaliser()
 
 for m in (bm_model, ihc_model, corr_model, ild_model):
     m.eval()
@@ -89,8 +91,8 @@ def run_ihc(audio_mono):
 
 def get_itd(ihc_l, ihc_r):
     with torch.no_grad():
-        corr = corr_model(ihc_l, ihc_r)   # (1, 1, F, ITD_bins)
-    return corr.squeeze(0).squeeze(0).numpy()   # (F, ITD_bins)
+        corr = corr_model(ihc_l, ihc_r)   # (1, F, ITD_bins)
+    return corr.squeeze(0).numpy()   # (F, ITD_bins)
 
 
 def get_ild(ihc_l, ihc_r):
@@ -99,8 +101,8 @@ def get_ild(ihc_l, ihc_r):
     avg_r = F.avg_pool2d(ihc_r.unsqueeze(1),
                          kernel_size=(1, ILD_STRIDE), stride=(1, ILD_STRIDE)).squeeze(1)
     with torch.no_grad():
-        ild = ild_model(avg_l, avg_r)   # (1, 1, F, T_avg)
-    return ild.squeeze(0).squeeze(0).numpy()   # (F, T_avg)
+        ild = ild_normaliser(ild_model(avg_l, avg_r))   # (1, F, T_avg)
+    return ild.squeeze(0).numpy()   # (F, T_avg)
 
 
 # ── precompute maps ────────────────────────────────────────────────────────────
