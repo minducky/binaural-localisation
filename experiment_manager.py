@@ -12,7 +12,7 @@ import yaml
 
 from dataset import setup_develop_dataloaders, setup_eval_dataloaders
 from models.get_model import get_model
-from plotter import ResultPlotter
+from result_plotter import ResultPlotter
 from trainer import Trainer
 
 

@@ -14,7 +14,7 @@ from sklearn.metrics import confusion_matrix
 from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
 
-from plotter import ResultPlotter
+from result_plotter import ResultPlotter
 
 
 class Trainer:
