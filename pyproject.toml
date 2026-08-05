@@ -1,0 +1,44 @@
+# Not a distributable package (no [build-system]/packaging section) - this
+# repo is a flat collection of experiment scripts run via `python main.py`,
+# not something meant to be `pip install`-ed. This file exists to document
+# runtime dependencies and to share Black/Ruff config with the sibling
+# `auditory-layers` package for a consistent style across both repos.
+
+[project]
+name = "binaural-localisation"
+version = "0.1.0"
+description = "Binaural sound-localization models and experiment framework."
+requires-python = ">=3.10"
+dependencies = [
+    "auditory-layers",
+    "h5py",
+    "numpy",
+    "pandas",
+    "plotly",
+    "psutil",
+    "pyyaml",
+    "scikit-learn",
+    "scipy",
+    "torch",
+    "torchaudio",
+    "torchinfo",
+    "tqdm",
+    "wandb",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort (import sorting), UP: pyupgrade,
+# B: flake8-bugbear (catches common bugs like mutable defaults)
+select = ["E", "W", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["models"]
