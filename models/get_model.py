@@ -10,8 +10,9 @@ from models.ducky import (
     DuckyIldOnsetModel,
     DuckyIldWholeModel,
     DuckyItdIldWholeModel,
-    DuckyItdModel,
     DuckyItdMultiScaleModel,
+    DuckyItdOnsetModel,
+    DuckyItdWholeModel,
     DuckyModel,
     DuckyMultiScaleModel,
 )
@@ -36,8 +37,10 @@ def get_model(config: dict) -> nn.Module:
         model = YangModel(config)
     elif config["MODEL"] == "YangMLP":
         model = YangMLP(config)
-    elif config["MODEL"] == "DuckyItd":
-        model = DuckyItdModel(config)
+    elif config["MODEL"] == "DuckyItdOnset":
+        model = DuckyItdOnsetModel(config)
+    elif config["MODEL"] == "DuckyItdWhole":
+        model = DuckyItdWholeModel(config)
     elif config["MODEL"] == "DuckyIldOnset":
         model = DuckyIldOnsetModel(config)
     elif config["MODEL"] == "DuckyIldWhole":
