@@ -248,9 +248,8 @@ def _make_ild_whole_encoder() -> nn.Sequential:
 # %% Models
 
 
-class DuckyItdModel(nn.Module):
-    """Experiments 1 & 2: ITD-only model with optional onset detection.
-    Config: DUCKY.ONSET = False (exp 1) or True (exp 2).
+class DuckyItdOnsetModel(nn.Module):
+    """Experiment 2: ITD-only model using the onset window.
     Input: (B, T, 2) stereo audio → Output: (B, num_classes)
     """
 
@@ -260,15 +259,13 @@ class DuckyItdModel(nn.Module):
         num_classes = config["NUM_CLASSES"]
 
         self.sr = sr
-        self.use_onset = config["DUCKY"]["ONSET"]
 
         self.peripheral = PeripheralFrontend(config)
+        self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
         self.CORR = Correlagram(
             sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
         )
         self.itd_normaliser = ITDNormaliser()
-        if self.use_onset:
-            self.onset_slicer = OnsetSlicer(sr=sr, avg_window=0.005, slice_window=0.050)
 
         self.ITD_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
 
@@ -283,9 +280,46 @@ class DuckyItdModel(nn.Module):
         x_r = x[:, :, 1].unsqueeze(1)
 
         x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
+        x_l, x_r, _, _ = self.onset_slicer(x_l, x_r)
 
-        if self.use_onset:
-            x_l, x_r, _, _ = self.onset_slicer(x_l, x_r)
+        with record_function("CORR"):
+            ITD = _compute_itd_map(self.CORR, self.itd_normaliser, x_l, x_r)
+
+        with record_function("Classifier"):
+            return self.Classifier(self.ITD_Encoder(ITD))
+
+
+class DuckyItdWholeModel(nn.Module):
+    """Experiment 1: ITD-only model using the whole signal.
+    Input: (B, T, 2) stereo audio → Output: (B, num_classes)
+    """
+
+    def __init__(self, config: dict):
+        super().__init__()
+        sr = config["DUCKY"]["SR"]
+        num_classes = config["NUM_CLASSES"]
+
+        self.sr = sr
+
+        self.peripheral = PeripheralFrontend(config)
+        self.CORR = Correlagram(
+            sr_res=sr, phy_itd_range=config["DUCKY"]["CORR"]["phy_ITD_range"]
+        )
+        self.itd_normaliser = ITDNormaliser()
+
+        self.ITD_Encoder = _make_itd_encoder()  # (B, 1, F, ITD_bins) → (B, 256)
+
+        self.Classifier = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_l = x[:, :, 0].unsqueeze(1)  # (B, 1, T)
+        x_r = x[:, :, 1].unsqueeze(1)
+
+        x_l, x_r = self.peripheral(x_l, x_r)  # (B, F, T)
 
         with record_function("CORR"):
             ITD = _compute_itd_map(self.CORR, self.itd_normaliser, x_l, x_r)
