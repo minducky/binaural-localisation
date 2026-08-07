@@ -23,6 +23,7 @@ dependencies = [
     "torch",
     "torchaudio",
     "torchinfo",
+    "torchvision",
     "tqdm",
     "wandb",
 ]
