@@ -17,6 +17,7 @@ from models.ducky import (
     DuckyMultiScaleModel,
 )
 from models.dummy import Dummy, Dummy1M, Dummy5M, Dummy10M
+from models.saddler import SaddlerModel
 from models.yang import YangMLP, YangModel
 
 
@@ -55,6 +56,8 @@ def get_model(config: dict) -> nn.Module:
         model = DuckyIldMultiScaleModel(config)
     elif config["MODEL"] == "DuckyMultiScale":
         model = DuckyMultiScaleModel(config)
+    elif config["MODEL"] == "Saddler":
+        model = SaddlerModel(config)
     elif config["MODEL"] == "Dummy":
         model = Dummy(config)
     elif config["MODEL"] == "Dummy1M":
