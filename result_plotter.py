@@ -1,4 +1,4 @@
-"""Evaluation result figures (confusion matrices) as PDF+HTML."""
+"""Evaluation result figures (confusion matrices) as PDF."""
 
 import os
 
@@ -20,9 +20,7 @@ class ResultPlotter:
     def plot_confusion_matrices(self, conf_matrices: dict, save_dir: str) -> None:
         """Plot and save azimuth, elevation, and class confusion matrices."""
         pdf_dir = os.path.join(save_dir, "pdf")
-        html_dir = os.path.join(save_dir, "html")
         os.makedirs(pdf_dir, exist_ok=True)
-        os.makedirs(html_dir, exist_ok=True)
 
         specs = [
             ("cm_azim", "azim_labels", "Azimuth Confusion Matrix", "confusion_azim"),
@@ -40,22 +38,33 @@ class ResultPlotter:
             labels = conf_matrices[label_key]
 
             n = len(labels)
-            # Scale figure size with matrix dimension
-            size = max(400, min(1200, n * 18))
+            # Scale figure size (inches) with matrix dimension
+            size_in = max(4.0, min(12.0, n * 0.18))
+
+            # Confusion matrices can have hundreds of classes (up to ~504),
+            # at which point the figure is already at its 12in size cap and
+            # plotter's default 1200 DPI would rasterize a many-thousand-
+            # pixel-per-side image -- huge file, slow to render. A
+            # per-cell-content heatmap doesn't need that density regardless
+            # of class count, so cap the longer image dimension at
+            # MAX_RASTER_PX instead of using a flat DPI: small matrices
+            # (few classes, small size_in) still get the full 1200 DPI
+            # default (unchanged from before -- a small matrix's file size
+            # was already fine), while large ones scale down automatically.
+            MAX_RASTER_PX = 6000
+            longer_side_in = size_in + 1  # width is size_in+1, height is size_in
+            dpi = min(1200, int(MAX_RASTER_PX / longer_side_in))
 
             plot_confusion_matrix(
                 cm,
                 labels,
                 title=title,
-                width=size + 100,
-                height=size,
+                width=size_in + 1,
+                height=size_in,
                 tick_fontsize=max(6, 10 - n // 20),
-                show=False,
+                dpi=dpi,
                 download=True,
-                download_fpath=[
-                    os.path.join(pdf_dir, f"{fname}.pdf"),
-                    os.path.join(html_dir, f"{fname}.html"),
-                ],
+                download_fpath=os.path.join(pdf_dir, f"{fname}.pdf"),
             )
 
-        print(f"Confusion matrix plots saved to {save_dir}/")
+        print(f"Confusion matrix plots saved to {pdf_dir}/")
