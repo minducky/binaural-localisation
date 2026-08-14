@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import csv
+import gc
 import sys
 import time
 import traceback
@@ -244,6 +245,7 @@ def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
         "status": "ok",
     }
 
+    model, optimizer, dataloaders = None, None, None
     try:
         config = prepare_config(target, gpu, debug)
 
@@ -276,6 +278,14 @@ def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
         row["status"] = "ERROR: " + traceback.format_exc(limit=5).replace(
             "\n", " | "
         )
+    finally:
+        # Each target builds its own model/dataloaders in one long-lived
+        # process; without an explicit release, cached CUDA allocations
+        # from one target can fragment memory and starve the next one.
+        del model, optimizer, dataloaders
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     return row
 
