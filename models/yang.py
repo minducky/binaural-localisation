@@ -431,7 +431,9 @@ class YangModel(nn.Module):
         super().__init__()
         sr = config["YANG"]["SR"]
         sr_res = config["YANG"]["SR_RES"]
-        input_dim = config["YANG"]["INPUT_DIM"]  # tau_taps * alpha_taps * freq_bins
+        input_dim = config["YANG"][
+            "YANG_INPUT_DIM"
+        ]  # tau_taps * alpha_taps * freq_bins
         hidden_dim_1 = config["YANG"]["HIDDEN_DIM_1"]
         hidden_dim_2 = config["YANG"]["HIDDEN_DIM_2"]
         output_dim = config["NUM_CLASSES"]  # 72 * 7 / 19 * 5
