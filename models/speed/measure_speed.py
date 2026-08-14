@@ -9,18 +9,21 @@ CSV incrementally, one row per model, so a partial run still leaves usable
 output.
 
 Must be run with the HPC dataset mounted (paths under ``/scratch/...`` in
-the config files), from inside the ``binaural-localisation`` repo (any cwd
-works, since the repo root is added to ``sys.path`` below).
+the config files). Can be launched from any working directory - the
+process chdir's to the repo root on startup, since config values like
+``SADDLER.ARCH_DIR`` and ``FILTER_COEFF_DIR`` are repo-root-relative paths.
 
 Usage:
     python models/speed/measure_speed.py
     python models/speed/measure_speed.py --debug --group saddler --only Saddler_arch01
     python models/speed/measure_speed.py --gpu 1 --group ducky
+    python models/speed/measure_speed.py --batch-size 16 --group ducky
 """
 
 import argparse
 import csv
 import gc
+import os
 import sys
 import time
 import traceback
@@ -32,6 +35,7 @@ from torch import nn, optim
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+os.chdir(REPO_ROOT)
 
 from model_dissection import measure_train_epoch_time  # noqa: E402
 
@@ -186,13 +190,17 @@ def apply_overrides(config: dict, overrides: dict) -> dict:
     return config
 
 
-def prepare_config(target: dict, gpu: int | None, debug: bool) -> dict:
+def prepare_config(
+    target: dict, gpu: int | None, debug: bool, batch_size: int | None
+) -> dict:
     """Loads and fully resolves the config for one benchmark target.
 
     Args:
         target: A target dict from `build_targets`.
         gpu: If given, overrides GPU_NUM for this run.
         debug: If True, applies DEBUG_CONFIG for a small smoke-test dataset.
+        batch_size: If given, overrides BATCH_SIZE for this run (applied
+            after the DEBUG_CONFIG merge, so it wins over both).
 
     Returns:
         The resolved config dict, ready for `setup_develop_dataloaders`
@@ -211,6 +219,8 @@ def prepare_config(target: dict, gpu: int | None, debug: bool) -> dict:
         apply_debug_overrides(config)
     else:
         config["DEBUG"] = False
+    if batch_size is not None:
+        config["BATCH_SIZE"] = batch_size
 
     return config
 
@@ -218,7 +228,9 @@ def prepare_config(target: dict, gpu: int | None, debug: bool) -> dict:
 # %% Benchmark execution
 
 
-def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
+def run_target(
+    target: dict, gpu: int | None, debug: bool, batch_size: int | None
+) -> dict:
     """Builds one model, times a real training epoch, and counts params.
 
     Any exception during setup/training is caught so one broken target
@@ -229,6 +241,7 @@ def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
         target: A target dict from `build_targets`.
         gpu: If given, overrides GPU_NUM for this run.
         debug: If True, uses each config's small DEBUG_CONFIG dataset.
+        batch_size: If given, overrides BATCH_SIZE for this run.
 
     Returns:
         A CSV row dict matching `CSV_FIELDS`.
@@ -247,7 +260,7 @@ def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
 
     model, optimizer, dataloaders = None, None, None
     try:
-        config = prepare_config(target, gpu, debug)
+        config = prepare_config(target, gpu, debug, batch_size)
 
         dataloaders, class_mapping = setup_develop_dataloaders(config)
         config["NUM_CLASSES"] = len(class_mapping["class_to_angle"])
@@ -291,7 +304,11 @@ def run_target(target: dict, gpu: int | None, debug: bool) -> dict:
 
 
 def run_benchmark(
-    targets: list[dict], gpu: int | None, debug: bool, output_path: Path
+    targets: list[dict],
+    gpu: int | None,
+    debug: bool,
+    batch_size: int | None,
+    output_path: Path,
 ) -> None:
     """Runs every target in order, writing each result to CSV as it finishes.
 
@@ -299,6 +316,7 @@ def run_benchmark(
         targets: Targets to benchmark, in order.
         gpu: If given, overrides GPU_NUM for every target.
         debug: If True, uses each config's small DEBUG_CONFIG dataset.
+        batch_size: If given, overrides BATCH_SIZE for every target.
         output_path: CSV file to write (created/overwritten).
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,7 +329,7 @@ def run_benchmark(
 
         for i, target in enumerate(targets, start=1):
             print(f"\n[{i}/{len(targets)}] {target['group']}/{target['name']}")
-            row = run_target(target, gpu, debug)
+            row = run_target(target, gpu, debug, batch_size)
             writer.writerow(row)
             f.flush()
             print(f"  -> {row['status']} | epoch_time_sec={row['epoch_time_sec']}")
@@ -332,6 +350,13 @@ def main() -> None:
         "--debug",
         action="store_true",
         help="Use each config's small DEBUG_CONFIG dataset for a quick smoke test.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override BATCH_SIZE for every target (e.g. to work around OOM "
+        "on a smaller GPU). Applied after --debug, so it wins over both.",
     )
     parser.add_argument(
         "--group",
@@ -364,7 +389,7 @@ def main() -> None:
         / f"epoch_speed_{time.strftime('%Y%m%d_%H%M%S')}.csv"
     )
 
-    run_benchmark(targets, args.gpu, args.debug, output_path)
+    run_benchmark(targets, args.gpu, args.debug, args.batch_size, output_path)
 
 
 if __name__ == "__main__":
