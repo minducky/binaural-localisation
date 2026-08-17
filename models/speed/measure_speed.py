@@ -46,7 +46,7 @@ from models.get_model import get_model  # noqa: E402
 
 CONFIGS_DIR = REPO_ROOT / "configs"
 
-SADDLER_TEMPLATE = CONFIGS_DIR / "Saddler_simplified_IHC3000_arch02.yaml"
+SADDLER_TEMPLATE = CONFIGS_DIR / "Saddler" / "Saddler_simplified_IHC3000_arch02.yaml"
 SADDLER_ARCHS = [f"arch{i:02d}" for i in range(1, 11)]
 
 # The 9 non-learnable-periphery Ducky variants (excludes Learnable_Ducky_*
@@ -64,7 +64,7 @@ DUCKY_CONFIGS = [
     "Ducky_Itdild_MultiScale.yaml",
 ]
 
-YANG_TEMPLATE = CONFIGS_DIR / "yang2025_lr1e-3_reproduce.yaml"
+YANG_TEMPLATE = CONFIGS_DIR / "Yang" / "yang.yaml"
 YANG_HIDDEN_DIM_1 = 1050
 YANG_HIDDEN_DIM_2 = 350
 
@@ -115,7 +115,7 @@ def build_targets(group: str) -> list[dict]:
                 {
                     "group": "Ducky",
                     "name": Path(fname).stem,
-                    "config_path": CONFIGS_DIR / fname,
+                    "config_path": CONFIGS_DIR / "Ducky" / fname,
                     "overrides": {},
                 }
             )

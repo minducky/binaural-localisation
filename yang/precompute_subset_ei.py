@@ -15,6 +15,9 @@ Usage:
 
 Output:
     <EI_DATASET_DIR>/train_subsets/
+        subset_0.25pct.hdf5
+        subset_0.5pct.hdf5
+        subset_1pct.hdf5
         subset_2pct.hdf5
         subset_5pct.hdf5
         subset_10pct.hdf5

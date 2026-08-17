@@ -2,10 +2,12 @@
 
 import gc
 import os
+import random
 from copy import deepcopy
 from datetime import datetime
 from time import time
 
+import numpy as np
 import torch
 import wandb
 import yaml
@@ -107,6 +109,16 @@ class ExperimentManager:
             ),
         )
 
+    # %% Reproducibility
+    @staticmethod
+    def _set_seed(seed: int) -> None:
+        """Seed RNGs used for model init and data shuffling"""
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
     # %% Running Experiments
     def run_experiment(self, exp_idx: int) -> float:
         """Run single experiment"""
@@ -142,6 +154,10 @@ class ExperimentManager:
 
         # Create plotter
         plotter = ResultPlotter(exp_dirs)
+
+        # Seed RNGs before dataloader/model creation so RANDOM_SEED controls
+        # data shuffling order and weight initialisation
+        self._set_seed(exp_config["RANDOM_SEED"])
 
         # Setup dataloaders and get global class mapping
         develop_dataloaders, global_class_mapping = setup_develop_dataloaders(
