@@ -54,12 +54,12 @@ SADDLER_ARCHS = [f"arch{i:02d}" for i in range(1, 11)]
 # its own EXPERIMENT_CONFIGS.MODEL value.
 DUCKY_CONFIGS = [
     "Ducky_IldOnly_MultiScale.yaml",
-    "Ducky_IldOnly_NoOnset.yaml",
+    "Ducky_IldOnly_Whole.yaml",
     "Ducky_IldOnly_Onset.yaml",
     "Ducky_ItdIld_Onset.yaml",
     "Ducky_ItdIld_Whole.yaml",
     "Ducky_ItdOnly_MultiScale.yaml",
-    "Ducky_ItdOnly_NoOnset.yaml",
+    "Ducky_ItdOnly_Whole.yaml",
     "Ducky_ItdOnly_Onset.yaml",
     "Ducky_Itdild_MultiScale.yaml",
 ]
